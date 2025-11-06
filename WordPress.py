@@ -241,9 +241,10 @@ def get_gemini_prompt(html_content, filename):
     **CRITICAL INSTRUCTIONS:**
     1.  Analyze the provided HTML for the file `{filename}`.
     2.  Identify all static content (text, images, links, lists, repeaters) that should be manageable from the WordPress admin panel.
-    3.  **MANDATORY IMAGE ATTRIBUTES:** For every `<img>` tag, you MUST include `loading="lazy"` and set the `title` attribute to the same value as the `alt` attribute. Example: `<img src="..." alt="Description" title="Description" loading="lazy">`.
-    4.  **MANDATORY LINK ATTRIBUTES:** For every `<a>` tag, you MUST include a `title` attribute. When using ACF Link fields, the `title` attribute should be populated with the 'title' value from the ACF Link Array. Example: `<a href="{{url}}" title="{{title}}" target="{{target}}">{{text}}</a>`.
-    5.  **OPTIMIZATION CRITICAL: Fetch ALL page data at once at the beginning of the PHP file using `$page_fields = get_fields(get_the_ID());` and then access all fields via this array (e.g., `$page_fields['your_field_name']`). For repeater fields, use standard `foreach` loops on the `$page_fields['your_repeater_field']` array. DO NOT use `have_rows()` and `the_row()` for repeaters.**
+    3.  **MANDATORY: Prefix Custom PHP Functions:** All custom PHP functions you generate (e.g., `get_image_tag` or `custom_helper_function`) MUST be prefixed with a unique identifier like `yourthemename_` (e.g., `yourthemename_get_image_tag`). This prevents naming conflicts with WordPress core functions or other plugins.
+    4.  **MANDATORY IMAGE ATTRIBUTES:** For every `<img>` tag, you MUST include `loading="lazy"` and set the `title` attribute to the same value as the `alt` attribute. Example: `<img src="..." alt="Description" title="Description" loading="lazy">`.
+    5.  **MANDATORY LINK ATTRIBUTES:** For every `<a>` tag, you MUST include a `title` attribute. When using ACF Link fields, the `title` attribute should be populated with the 'title' value from the ACF Link Array. Example: `<a href="{{url}}" title="{{title}}" target="{{target}}">{{text}}</a>`.
+    6.  **OPTIMIZATION CRITICAL: Fetch ALL page data at once at the beginning of the PHP file using `$page_fields = get_fields(get_the_ID());` and then access all fields via this array (e.g., `$page_fields['your_field_name']`). For repeater fields, use standard `foreach` loops on the `$page_fields['your_repeater_field']` array. DO NOT use `have_rows()` and `the_row()` for repeaters.**
         **IMPORTANT: Use `echo wp_kses_post()` for outputting content from WYSIWYG or Text Area fields to allow for HTML tags. Use `esc_html()` or `esc_url()` for simple text fields or URLs for better security. For image fields, ALWAYS include a check for `is_array()` to ensure proper handling of return formats.**
         **Example for repeater fields:**
         ```php
@@ -257,8 +258,8 @@ def get_gemini_prompt(html_content, filename):
         endif;
         ?>
         ```
-    6.  Generate a clear, text-based ACF field structure that a user can follow to create the fields in the ACF plugin UI. Use field types like Text, Text Area, Image, Gallery, Repeater, Group, Link, and True/False where appropriate. Structure it with Tabs for better organization in the WP admin.
-    7.  **CRITICAL CONDITIONAL RENDERING:** Each section of the generated PHP code MUST be wrapped in a PHP `if` condition that checks for the existence of its essential ACF data before rendering. For example, if a section's primary content is driven by a repeater field named `hero_slides`, the section should be wrapped like this:
+    7.  Generate a clear, text-based ACF field structure that a user can follow to create the fields in the ACF plugin UI. Use field types like Text, Text Area, Image, Gallery, Repeater, Group, Link, and True/False where appropriate. Structure it with Tabs for better organization in the WP admin.
+    8.  **CRITICAL CONDITIONAL RENDERING:** Each section of the generated PHP code MUST be wrapped in a PHP `if` condition that checks for the existence of its essential ACF data before rendering. For example, if a section's primary content is driven by a repeater field named `hero_slides`, the section should be wrapped like this:
         ```php
         <?php if (!empty($page_fields['hero_slides'])) : // Check if essential data exists ?>
             <!-- START: Hero-section -->
@@ -365,9 +366,10 @@ def get_gemini_prompt(html_content, filename):
     **CRITICAL INSTRUCTIONS:**
     1.  Analyze the provided HTML for the file `{filename}`.
     2.  Identify all static content (text, images, links, lists, repeaters) that should be manageable from the WordPress admin panel.
-    3.  **MANDATORY IMAGE ATTRIBUTES:** For every `<img>` tag, you MUST include `loading="lazy"` and set the `title` attribute to the same value as the `alt` attribute. Example: `<img src="..." alt="Description" title="Description" loading="lazy">`.
-    4.  **MANDATORY LINK ATTRIBUTES:** For every `<a>` tag, you MUST include a `title` attribute. When using ACF Link fields, the `title` attribute should be populated with the 'title' value from the ACF Link Array. Example: `<a href="{{url}}" title="{{title}}" target="{{target}}">{{text}}</a>`.
-    5.  **OPTIMIZATION CRITICAL: Fetch ALL header data at once at the beginning of the PHP file using `$header_fields = get_fields('option');` and then access all fields via this array (e.g., `$header_fields['your_field_name']`). For repeater fields, use standard `foreach` loops on the `$header_fields['your_repeater_field']` array. DO NOT use `have_rows()` and `the_row()` for repeaters.**
+    3.  **MANDATORY: Prefix Custom PHP Functions:** All custom PHP functions you generate (e.g., `get_image_tag` or `custom_helper_function`) MUST be prefixed with a unique identifier like `yourthemename_` (e.g., `yourthemename_get_image_tag`). This prevents naming conflicts with WordPress core functions or other plugins.
+    4.  **MANDATORY IMAGE ATTRIBUTES:** For every `<img>` tag, you MUST include `loading="lazy"` and set the `title` attribute to the same value as the `alt` attribute. Example: `<img src="..." alt="Description" title="Description" loading="lazy">`.
+    5.  **MANDATORY LINK ATTRIBUTES:** For every `<a>` tag, you MUST include a `title` attribute. When using ACF Link fields, the `title` attribute should be populated with the 'title' value from the ACF Link Array. Example: `<a href="{{url}}" title="{{title}}" target="{{target}}">{{text}}</a>`.
+    6.  **OPTIMIZATION CRITICAL: Fetch ALL header data at once at the beginning of the PHP file using `$header_fields = get_fields('option');` and then access all fields via this array (e.g., `$header_fields['your_field_name']`). For repeater fields, use standard `foreach` loops on the `$header_fields['your_repeater_field']` array. DO NOT use `have_rows()` and `the_row()` for repeaters.**
         **IMPORTANT: Use `echo wp_kses_post()` for outputting content from WYSIWYG or Text Area fields to allow for HTML tags. Use `esc_html()` or `esc_url()` for simple text fields or URLs for better security. For image fields, ALWAYS include a check for `is_array()` to ensure proper handling of return formats.**
         
         **HEADER TAG INSTRUCTIONS - VERY IMPORTANT:**

@@ -55,6 +55,7 @@ def log_message(message, icon='info', level='INFO'):
         
         # Print to console
         print(log_line)
+        sys.stdout.flush() # Ensure immediate output
         
         # Write to log file
         try:
@@ -69,6 +70,7 @@ def log_section(title):
     with log_lock:
         log_line = f"\n{separator}\n{'🔷 ' + title.upper()}\n{separator}\n"
         print(log_line)
+        sys.stdout.flush() # Ensure immediate output
         try:
             with open(log_file, 'a', encoding='utf-8') as f:
                 f.write(log_line)
