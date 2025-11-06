@@ -44,10 +44,9 @@ Your output MUST be *only* the PHP array for the 'fields' key, without any surro
     *   `'label'`: A human-readable version of the field name (e.g., for `about_section_subheading`, the label is "About Section Subheading").
     *   `'name'`: The exact snake_case field name provided by the user. For `tab` fields, the `'name'` key must be an empty string `''`.
 4.  **Text Area Field Specific Rule:** For any `textarea` field, the `'new_lines'` key MUST be set to an empty string: `'new_lines' => ''`.
-5.  **Strictly Empty Default Values:** The `'default_value'` key, if present, MUST always be an empty string: `'default_value' => ''`.
-6.  **Nested Field Integrity (`parent_repeater`):** For any sub-fields inside a `repeater` field, you MUST include the `'parent_repeater' => 'field_key_of_the_parent_repeater'` key-value pair within each sub-field's array. The value must be the unique `'key'` of the parent repeater field itself.
-7.  **Correct `choices` Array Format:** For `select`, `checkbox`, and `radio` fields, the `choices` array must strictly follow the `'value : Label'` format for both the array key and the value (e.g., `'feature_a: Feature A' => 'feature_a: Feature A'`).
-8.  **IMPORTANT - Tab Field Requirement:** If the first field in the user request is NOT a tab field, you MUST add a tab field at the very beginning with the label matching the page name (e.g., "Header Settings" for header, "Footer Settings" for footer). This ensures proper organization in the WordPress admin.
+5.  **Nested Field Integrity (`parent_repeater`):** For any sub-fields inside a `repeater` field, you MUST include the `'parent_repeater' => 'field_key_of_the_parent_repeater'` key-value pair within each sub-field's array. The value must be the unique `'key'` of the parent repeater field itself.
+6.  **Correct `choices` Array Format:** For `select`, `checkbox`, and `radio` fields, the `choices` array must strictly follow the `'value : Label'` format for both the array key and the value (e.g., `'feature_a: Feature A' => 'feature_a: Feature A'`).
+7.  **IMPORTANT - Tab Field Requirement:** If the first field in the user request is NOT a tab field, you MUST add a tab field at the very beginning with the label matching the page name (e.g., "Header Settings" for header, "Footer Settings" for footer). This ensures proper organization in the WordPress admin.
 
 Here is the user's request for the fields:
 --- START OF USER REQUEST ---
@@ -56,9 +55,12 @@ Here is the user's request for the fields:
 """
 
 
-def setup_logging(project_name):
+def setup_logging(project_theme_path):
     """Sets up a logger to file and console."""
-    log_filename = f"log_ACF_Generator_{project_name}.txt"
+    # Ensure the directory exists
+    os.makedirs(project_theme_path, exist_ok=True)
+    
+    log_filename = os.path.join(project_theme_path, "Log_ACF_Generator.txt")
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(message)s',
@@ -70,7 +72,7 @@ def setup_logging(project_name):
     )
     # Clear log file on new run
     with open(log_filename, 'w', encoding='utf-8') as f:
-        f.write(f"Log for ACF Generation - Project: {project_name} - {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"Log for ACF Generation - Project: {os.path.basename(project_theme_path)} - {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
         f.write("="*80 + "\n")
     return logging.getLogger()
 
@@ -315,18 +317,19 @@ def main():
     start_time = time.time()
     
     # --- Setup ---
-    project_name = os.path.basename(os.getenv("PROJECT_THEME_PATH", "default-project"))
-    logger = setup_logging(project_name)
-    
-    logger.info(f"{LOG_ICONS['START']} Starting ACF Field Generation Script for project: '{project_name}'")
-
     try:
         config = load_configuration()
         genai.configure(api_key=config["api_key"])
-        logger.info(f"{LOG_ICONS['CONFIG']} Configuration loaded successfully.")
     except ValueError as e:
-        logger.error(f"{LOG_ICONS['ERROR']} {e}")
+        logging.error(f"{LOG_ICONS['ERROR']} {e}")
         return
+
+    project_theme_path = config["PROJECT_THEME_PATH"]
+    project_name = os.path.basename(project_theme_path)
+    logger = setup_logging(project_theme_path)
+    
+    logger.info(f"{LOG_ICONS['START']} Starting ACF Field Generation Script for project: '{project_name}'")
+    logger.info(f"{LOG_ICONS['CONFIG']} Configuration loaded successfully.")
 
     # --- File Discovery ---
     acf_fields_dir = os.path.join(config["PROJECT_THEME_PATH"], "ACF Fields")
