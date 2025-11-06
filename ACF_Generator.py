@@ -44,9 +44,10 @@ Your output MUST be *only* the PHP array for the 'fields' key, without any surro
     *   `'label'`: A human-readable version of the field name (e.g., for `about_section_subheading`, the label is "About Section Subheading").
     *   `'name'`: The exact snake_case field name provided by the user. For `tab` fields, the `'name'` key must be an empty string `''`.
 4.  **Text Area Field Specific Rule:** For any `textarea` field, the `'new_lines'` key MUST be set to an empty string: `'new_lines' => ''`.
-5.  **Nested Field Integrity (`parent_repeater`):** For any sub-fields inside a `repeater` field, you MUST include the `'parent_repeater' => 'field_key_of_the_parent_repeater'` key-value pair within each sub-field's array. The value must be the unique `'key'` of the parent repeater field itself.
-6.  **Correct `choices` Array Format:** For `select`, `checkbox`, and `radio` fields, the `choices` array must strictly follow the `'value : Label'` format for both the array key and the value (e.g., `'feature_a: Feature A' => 'feature_a: Feature A'`).
-7.  **IMPORTANT - Tab Field Requirement:** If the first field in the user request is NOT a tab field, you MUST add a tab field at the very beginning with the label matching the page name (e.g., "Header Settings" for header, "Footer Settings" for footer). This ensures proper organization in the WordPress admin.
+5.  **Strictly Empty Default Values:** The `'default_value'` key, if present, MUST always be an empty string: `'default_value' => ''`.
+6.  **Nested Field Integrity (`parent_repeater`):** For any sub-fields inside a `repeater` field, you MUST include the `'parent_repeater' => 'field_key_of_the_parent_repeater'` key-value pair within each sub-field's array. The value must be the unique `'key'` of the parent repeater field itself.
+7.  **Correct `choices` Array Format:** For `select`, `checkbox`, and `radio` fields, the `choices` array must strictly follow the `'value : Label'` format for both the array key and the value (e.g., `'feature_a: Feature A' => 'feature_a: Feature A'`).
+8.  **IMPORTANT - Tab Field Requirement:** If the first field in the user request is NOT a tab field, you MUST add a tab field at the very beginning with the label matching the page name (e.g., "Header Settings" for header, "Footer Settings" for footer). This ensures proper organization in the WordPress admin.
 
 Here is the user's request for the fields:
 --- START OF USER REQUEST ---

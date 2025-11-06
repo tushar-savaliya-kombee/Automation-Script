@@ -241,42 +241,67 @@ def get_gemini_prompt(html_content, filename):
     **CRITICAL INSTRUCTIONS:**
     1.  Analyze the provided HTML for the file `{filename}`.
     2.  Identify all static content (text, images, links, lists, repeaters) that should be manageable from the WordPress admin panel.
-    3.  Generate the PHP code that uses ACF functions (like `get_field()`, `the_field()`, `have_rows()`, `the_row()`, `get_sub_field()`) to display this dynamic content. **IMPORTANT: Use `echo wp_kses_post()` for outputting content from WYSIWYG or Text Area fields to allow for HTML tags. Use `esc_html()` or `esc_url()` for simple text fields or URLs for better security.**
-    4.  Generate a clear, text-based ACF field structure that a user can follow to create the fields in the ACF plugin UI. Use field types like Text, Text Area, Image, Gallery, Repeater, Group, Link, and True/False where appropriate. Structure it with Tabs for better organization in the WP admin.
+    3.  **MANDATORY IMAGE ATTRIBUTES:** For every `<img>` tag, you MUST include `loading="lazy"` and set the `title` attribute to the same value as the `alt` attribute. Example: `<img src="..." alt="Description" title="Description" loading="lazy">`.
+    4.  **MANDATORY LINK ATTRIBUTES:** For every `<a>` tag, you MUST include a `title` attribute. When using ACF Link fields, the `title` attribute should be populated with the 'title' value from the ACF Link Array. Example: `<a href="{{url}}" title="{{title}}" target="{{target}}">{{text}}</a>`.
+    5.  **OPTIMIZATION CRITICAL: Fetch ALL page data at once at the beginning of the PHP file using `$page_fields = get_fields(get_the_ID());` and then access all fields via this array (e.g., `$page_fields['your_field_name']`). For repeater fields, use standard `foreach` loops on the `$page_fields['your_repeater_field']` array. DO NOT use `have_rows()` and `the_row()` for repeaters.**
+        **IMPORTANT: Use `echo wp_kses_post()` for outputting content from WYSIWYG or Text Area fields to allow for HTML tags. Use `esc_html()` or `esc_url()` for simple text fields or URLs for better security. For image fields, ALWAYS include a check for `is_array()` to ensure proper handling of return formats.**
+        **Example for repeater fields:**
+        ```php
+        <?php
+        $repeater_items = $page_fields['your_repeater_field'] ?? [];
+        if (!empty($repeater_items)) :
+            foreach ($repeater_items as $item) :
+                $sub_field_value = esc_html($item['your_sub_field'] ?? '');
+                // ... use $sub_field_value ...
+            endforeach;
+        endif;
+        ?>
+        ```
+    6.  Generate a clear, text-based ACF field structure that a user can follow to create the fields in the ACF plugin UI. Use field types like Text, Text Area, Image, Gallery, Repeater, Group, Link, and True/False where appropriate. Structure it with Tabs for better organization in the WP admin.
+    7.  **CRITICAL CONDITIONAL RENDERING:** Each section of the generated PHP code MUST be wrapped in a PHP `if` condition that checks for the existence of its essential ACF data before rendering. For example, if a section's primary content is driven by a repeater field named `hero_slides`, the section should be wrapped like this:
+        ```php
+        <?php if (!empty($page_fields['hero_slides'])) : // Check if essential data exists ?>
+            <!-- START: Hero-section -->
+            <!-- Your section PHP code here -->
+            <!-- END: Hero-section -->
+        <?php endif; ?>
+        ```
+        Apply this conditional logic to ALL sections.
     {section_info}"""
 
     # Dynamically add instructions for alternating layouts if detected
     if filename not in ["header.html", "footer.html"] and detect_alternating_layout(html_content):
         alternating_layout_instructions = """
-    5.  **ALTERNATING LAYOUT DETECTED**: For sections that alternate (e.g., image-left, then image-right), you MUST implement the PHP logic correctly inside the repeater loop. Use a counter variable, check if it's even (`$counter % 2 == 0`), and conditionally apply Tailwind CSS classes like `md:order-1` and `md:order-2` to reverse the column order. **Follow this correct example pattern:**
+    7.  **ALTERNATING LAYOUT DETECTED**: For sections that alternate (e.g., image-left, then image-right), you MUST implement the PHP logic correctly inside the repeater loop. Use a counter variable, check if it's even (`$counter % 2 == 0`), and conditionally apply Tailwind CSS classes like `md:order-1` and `md:order-2` to reverse the column order. **Follow this correct example pattern, using the `$page_fields` array and `foreach` loop for repeaters:**
         ```php
         <?php
         $item_index = 0;
-        if( have_rows('your_repeater_field') ):
-            while( have_rows('your_repeater_field') ) : the_row();
+        $repeater_items = $page_fields['your_repeater_field'] ?? [];
+        if (!empty($repeater_items)) :
+            foreach ($repeater_items as $item) :
                 $item_index++;
                 $is_even = ($item_index % 2 == 0);
         ?>
             <div class="flex flex-col md:flex-row">
                 <div class="md:w-1/2 <?php if ($is_even) echo 'md:order-2'; ?>">
-                    <?php // Image Column Content (e.g., the_sub_field('image')) ?>
+                    <?php // Image Column Content (e.g., esc_url($item['image_field']['url'] ?? '')) ?>
                 </div>
                 <div class="md:w-1/2 <?php if ($is_even) echo 'md:order-1'; ?>">
-                    <?php // Text Column Content (e.g., the_sub_field('text')) ?>
+                    <?php // Text Column Content (e.g., esc_html($item['text_field'] ?? '')) ?>
                 </div>
             </div>
         <?php
-            endwhile;
+            endforeach;
         endif;
         ?>
         ```
-    6.  The final output MUST be in the following format with the exact delimiters. DO NOT add any other text or explanations outside of these blocks.
+    8.  The final output MUST be in the following format with the exact delimiters. DO NOT add any other text or explanations outside of these blocks.
         """
         base_prompt += alternating_layout_instructions
     else:
         # Add the standard closing instruction if the special one isn't used
         base_prompt += """
-    5.  The final output MUST be in the following format with the exact delimiters. DO NOT add any other text or explanations outside of these blocks.
+    9.  The final output MUST be in the following format with the exact delimiters. DO NOT add any other text or explanations outside of these blocks.
         """
     
     # Final structure for a standard page template
@@ -340,7 +365,10 @@ def get_gemini_prompt(html_content, filename):
     **CRITICAL INSTRUCTIONS:**
     1.  Analyze the provided HTML for the file `{filename}`.
     2.  Identify all static content (text, images, links, lists, repeaters) that should be manageable from the WordPress admin panel.
-    3.  Generate *ONLY* the PHP code that uses ACF functions (like `get_field()`, `the_field()`, `have_rows()`, `the_row()`, `get_sub_field()`) to display this dynamic content. **IMPORTANT: Use `echo wp_kses_post()` for outputting content from WYSIWYG or Text Area fields to allow for HTML tags. Use `esc_html()` or `esc_url()` for simple text fields or URLs for better security.**
+    3.  **MANDATORY IMAGE ATTRIBUTES:** For every `<img>` tag, you MUST include `loading="lazy"` and set the `title` attribute to the same value as the `alt` attribute. Example: `<img src="..." alt="Description" title="Description" loading="lazy">`.
+    4.  **MANDATORY LINK ATTRIBUTES:** For every `<a>` tag, you MUST include a `title` attribute. When using ACF Link fields, the `title` attribute should be populated with the 'title' value from the ACF Link Array. Example: `<a href="{{url}}" title="{{title}}" target="{{target}}">{{text}}</a>`.
+    5.  **OPTIMIZATION CRITICAL: Fetch ALL header data at once at the beginning of the PHP file using `$header_fields = get_fields('option');` and then access all fields via this array (e.g., `$header_fields['your_field_name']`). For repeater fields, use standard `foreach` loops on the `$header_fields['your_repeater_field']` array. DO NOT use `have_rows()` and `the_row()` for repeaters.**
+        **IMPORTANT: Use `echo wp_kses_post()` for outputting content from WYSIWYG or Text Area fields to allow for HTML tags. Use `esc_html()` or `esc_url()` for simple text fields or URLs for better security. For image fields, ALWAYS include a check for `is_array()` to ensure proper handling of return formats.**
         
         **HEADER TAG INSTRUCTIONS - VERY IMPORTANT:**
         - DO NOT generate the opening `<header>` tag or any of its attributes (like class="main-header sticky...")
@@ -353,6 +381,7 @@ def get_gemini_prompt(html_content, filename):
         - For navigation menus, use WordPress's native menu system with `wp_nav_menu()` function
         - DO NOT use ACF Repeater fields for navigation items
         - Use an ACF Select field to let users choose which WordPress menu to display
+        - **IMPORTANT: When generating the `wp_nav_menu()` function, DO NOT include the following parameters: `'container' => false`, `'items_wrap' => '%3$s'`, and `'depth' => 1`. These are handled by the boilerplate.**
         - Example implementation:
         ```php
         <?php
@@ -371,7 +400,16 @@ def get_gemini_prompt(html_content, filename):
         
         The generated PHP code should be self-contained and ready to be inserted between `<!-- Start Header Content -->` and `<!-- End Header Content -->` comments in an existing `header.php` file.
         DO NOT include `get_header();`, `get_footer();`, `<!DOCTYPE html>`, `<html>`, `<head>`, `<body>` tags, or any other surrounding HTML/PHP boilerplate. Only the dynamic content that goes INSIDE the existing header tag.
-    4.  Generate a clear, text-based ACF field structure that a user can follow to create the fields in the ACF plugin UI. Use field types like Text, Text Area, Image, Gallery, Select, Group, Link, and True/False where appropriate. Structure it with Tabs for better organization in the WP admin.
+    6.  Generate a clear, text-based ACF field structure that a user can follow to create the fields in the ACF plugin UI. Use field types like Text, Text Area, Image, Gallery, Select, Group, Link, and True/False where appropriate. Structure it with Tabs for better organization in the WP admin.
+    7.  **CRITICAL CONDITIONAL RENDERING:** For the header, the conditional logic should check for essential data at the top-most level. For example, if the header's primary content is driven by a logo image field named `header_logo` or a navigation menu select field named `select_navigation_menu`, the entire header content should be wrapped like this:
+        ```php
+        <?php if (!empty($header_fields['header_logo']) || !empty($header_fields['select_navigation_menu'])) : // Check if essential header data exists ?>
+            <!-- Start Header Content -->
+            <!-- Your header PHP code here -->
+            <!-- End Header Content -->
+        <?php endif; ?>
+        ```
+        Apply this conditional logic to the entire header section.
     {section_info}5.  The final output MUST be in the following format with the exact delimiters. DO NOT add any other text or explanations outside of these blocks.
 
     [ACF_STRUCTURE_START]
@@ -383,7 +421,11 @@ def get_gemini_prompt(html_content, filename):
 
     *   **Tab: Header General**
         *   `header_logo` (Image) - Main logo for the header.
+            - Return Format: Link Array
+            - Instructions: "Ensure this field returns a Link Array (url, title, target)."
         *   `header_logo_link` (Link) - Link for the header logo.
+            - Return Format: Link Array
+            - Instructions: "Ensure this field returns a Link Array (url, title, target)."
         *   `cta_button_text` (Text) - Text for the Call-to-Action button.
         *   `cta_button_link` (Link) - Link for the Call-to-Action button.
     *   **Tab: Navigation Menu**
@@ -434,7 +476,10 @@ def get_gemini_prompt(html_content, filename):
     **CRITICAL INSTRUCTIONS:**
     1.  Analyze the provided HTML for the file `{filename}`.
     2.  Identify all static content (text, images, links, lists, repeaters) that should be manageable from the WordPress admin panel.
-    3.  Generate *ONLY* the PHP code that uses ACF functions (like `get_field()`, `the_field()`, `have_rows()`, `the_row()`, `get_sub_field()`) to display this dynamic content. **IMPORTANT: Use `echo wp_kses_post()` for outputting content from WYSIWYG or Text Area fields to allow for HTML tags. Use `esc_html()` or `esc_url()` for simple text fields or URLs for better security.**
+    3.  **MANDATORY IMAGE ATTRIBUTES:** For every `<img>` tag, you MUST include `loading="lazy"` and set the `title` attribute to the same value as the `alt` attribute. Example: `<img src="..." alt="Description" title="Description" loading="lazy">`.
+    4.  **MANDATORY LINK ATTRIBUTES:** For every `<a>` tag, you MUST include a `title` attribute. When using ACF Link fields, the `title` attribute should be populated with the 'title' value from the ACF Link Array. Example: `<a href="{{url}}" title="{{title}}" target="{{target}}">{{text}}</a>`.
+    5.  **OPTIMIZATION CRITICAL: Fetch ALL footer data at once at the beginning of the PHP file using `$footer_fields = get_fields('option');` and then access all fields via this array (e.g., `$footer_fields['your_field_name']`). For repeater fields, use standard `foreach` loops on the `$footer_fields['your_repeater_field']` array. DO NOT use `have_rows()` and `the_row()` for repeaters.**
+        **IMPORTANT: Use `echo wp_kses_post()` for outputting content from WYSIWYG or Text Area fields to allow for HTML tags. Use `esc_html()` or `esc_url()` for simple text fields or URLs for better security. For image fields, ALWAYS include a check for `is_array()` to ensure proper handling of return formats.**
         
         **NAVIGATION MENU INSTRUCTIONS - CRITICAL:**
         - If the footer contains navigation menus, use WordPress's native menu system with `wp_nav_menu()` function
@@ -458,8 +503,17 @@ def get_gemini_prompt(html_content, filename):
         
         The generated PHP code should be self-contained and ready to be inserted between `<!-- Start Footer -->` and `<!-- End Footer -->` comments in an existing `footer.php` file.
         DO NOT include `get_header();`, `get_footer();`, `<!DOCTYPE html>`, `<html>`, `<head>`, `<body>` tags, or any other surrounding HTML/PHP boilerplate. Only the dynamic content.
-    4.  Generate a clear, text-based ACF field structure that a user can follow to create the fields in the ACF plugin UI. Use field types like Text, Text Area, Image, Gallery, Select, Group, Link, and True/False where appropriate. Structure it with Tabs for better organization in the WP admin.
-    {section_info}5.  The final output MUST be in the following format with the exact delimiters. DO NOT add any other text or explanations outside of these blocks.
+    6.  Generate a clear, text-based ACF field structure that a user can follow to create the fields in the ACF plugin UI. Use field types like Text, Text Area, Image, Gallery, Select, Group, Link, and True/False where appropriate. Structure it with Tabs for better organization in the WP admin.
+    7.  **CRITICAL CONDITIONAL RENDERING:** For the footer, the conditional logic should check for essential data at the top-most level. For example, if the footer's primary content is driven by a logo image field named `footer_logo` or a copyright text field named `copyright_text`, the entire footer content should be wrapped like this:
+        ```php
+        <?php if (!empty($footer_fields['footer_logo']) || !empty($footer_fields['copyright_text'])) : // Check if essential footer data exists ?>
+            <!-- Start Footer -->
+            <!-- Your footer PHP code here -->
+            <!-- End Footer -->
+        <?php endif; ?>
+        ```
+        Apply this conditional logic to the entire footer section.
+    {section_info}7.  The final output MUST be in the following format with the exact delimiters. DO NOT add any other text or explanations outside of these blocks.
 
     [ACF_STRUCTURE_START]
     **ACF Field Group Setup for: {filename}**
@@ -470,6 +524,8 @@ def get_gemini_prompt(html_content, filename):
 
     *   **Tab: Footer General**
         *   `footer_logo` (Image) - Logo for the footer.
+            - Return Format: Image Array
+            - Instructions: "Ensure this field returns an Image Array (url, alt, ID)."
         *   `footer_description` (Text Area) - Short description for the footer.
     *   **Tab: Footer Navigation** (if applicable)
         *   `select_footer_menu` (Select) - Select a WordPress navigation menu to display in the footer.
@@ -484,6 +540,8 @@ def get_gemini_prompt(html_content, filename):
         *   `social_media_links` (Repeater)
             *   `icon_class` (Text) - Font Awesome class for the icon (e.g., `fab fa-facebook-f`). Strictly follow the format "fa fa-iconname" (e.g., `fa fa-running`, `fa fa-dumbbell`, `fa fa-biking`).
             *   `link_url` (Link) - URL for the social media link.
+                - Return Format: Link Array
+                - Instructions: "Ensure this field returns a Link Array (url, title, target)."
     *   **Tab: Copyright Info**
         *   `copyright_text` (Text) - Copyright text.
 
