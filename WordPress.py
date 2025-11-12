@@ -244,8 +244,13 @@ def get_gemini_prompt(html_content, filename):
     3.  **MANDATORY: Prefix Custom PHP Functions:** All custom PHP functions you generate (e.g., `get_image_tag` or `custom_helper_function`) MUST be prefixed with a unique identifier like `yourthemename_` (e.g., `yourthemename_get_image_tag`). This prevents naming conflicts with WordPress core functions or other plugins.
     4.  **MANDATORY IMAGE ATTRIBUTES:** For every `<img>` tag, you MUST include `loading="lazy"` and set the `title` attribute to the same value as the `alt` attribute. Example: `<img src="..." alt="Description" title="Description" loading="lazy">`.
     5.  **MANDATORY LINK ATTRIBUTES:** For every `<a>` tag, you MUST include a `title` attribute. When using ACF Link fields, the `title` attribute should be populated with the 'title' value from the ACF Link Array. Example: `<a href="{{url}}" title="{{title}}" target="{{target}}">{{text}}</a>`.
-    6.  **OPTIMIZATION CRITICAL: Fetch ALL page data at once at the beginning of the PHP file using `$page_fields = get_fields(get_the_ID());` and then access all fields via this array (e.g., `$page_fields['your_field_name']`). For repeater fields, use standard `foreach` loops on the `$page_fields['your_repeater_field']` array. DO NOT use `have_rows()` and `the_row()` for repeaters.**        
+    6.  **NEW INSTRUCTION - BUTTONS & LINKS:** For every button or `<a>` tag that acts as a call-to-action (CTA), two specific ACF fields should be generated:
+        *   `button_text` (Text Field) - The text displayed on the button or link.
+        *   `page_link` (Page Link Field) - Defines which WordPress page the button or link redirects to.
+        This ensures that button/link text and their destinations are easily manageable.
+    7.  **OPTIMIZATION CRITICAL: Fetch ALL page data at once at the beginning of the PHP file using `$page_fields = get_fields(get_the_ID());` and then access all fields via this array (e.g., `$page_fields['your_field_name']`). For repeater fields, use standard `foreach` loops on the `$page_fields['your_repeater_field']` array. DO NOT use `have_rows()` and `the_row()` for repeaters.**        
         **IMPORTANT: Use `echo wp_kses_post()` for outputting content from WYSIWYG or Text Area fields to allow for HTML tags. Use `esc_html()` or `esc_url()` for simple text fields or URLs for better security. For image fields, ALWAYS include a check for `is_array()` to ensure proper handling of return formats.**
+        **CRITICAL ACF PAGE LINK HANDLING:** When using ACF Page Link fields (which return an array), ALWAYS access the `url` and `title` properties within your PHP code. For example, to get the URL, use `$page_fields['your_page_link_field']['url'] ?? '#'` and for the title, use `$page_fields['your_page_link_field']['title'] ?? 'Link Text'`. This is crucial to avoid passing an array to functions expecting a string.
         **Example for repeater fields:**
         ```php
         <?php
@@ -542,7 +547,7 @@ def get_gemini_prompt(html_content, filename):
     *   **Tab: Social Links**
         *   `social_media_links` (Repeater)
             *   `icon_class` (Text) - Font Awesome class for the icon (e.g., `fab fa-facebook-f`). Strictly follow the format "fa fa-iconname" (e.g., `fa fa-running`, `fa fa-dumbbell`, `fa fa-biking`).
-            *   `link_url` (Link) - URL for the social media link.
+            *   `link_url` (URL) - URL for the social media link.
                 - Return Format: Link Array
                 - Instructions: "Ensure this field returns a Link Array (url, title, target)."
     *   **Tab: Copyright Info**
