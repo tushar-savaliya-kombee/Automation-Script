@@ -26,6 +26,12 @@ LOG_FILE = os.path.join(PROJECT_THEME_PATH, "Log-for-figmy-analysis.txt")
 # Threading configuration
 MAX_WORKERS = 3  # Number of concurrent API calls
 
+# Token tracking
+total_prompt_tokens = 0
+total_completion_tokens = 0
+total_tokens = 0
+token_lock = threading.Lock()
+
 # --- Configure Gemini AI ---
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
@@ -165,6 +171,8 @@ def get_batch_ai_decision(sections_dict):
     sections_dict: {page_name: [section_names]}
     Returns: {section_name: decision}
     """
+    global total_prompt_tokens, total_completion_tokens, total_tokens
+    
     try:
         model = genai.GenerativeModel(GEMINI_MODEL)
         
@@ -193,6 +201,17 @@ def get_batch_ai_decision(sections_dict):
         logging.debug(f"Sending batch request with {len(sections_list)} sections")
         
         response = model.generate_content(prompt)
+        
+        # Track token usage
+        if hasattr(response, 'usage_metadata'):
+            with token_lock:
+                prompt_tokens = getattr(response.usage_metadata, 'prompt_token_count', 0)
+                completion_tokens = getattr(response.usage_metadata, 'candidates_token_count', 0)
+                total_prompt_tokens += prompt_tokens
+                total_completion_tokens += completion_tokens
+                total_tokens += (prompt_tokens + completion_tokens)
+                logging.debug(f"Tokens used - Prompt: {prompt_tokens}, Completion: {completion_tokens}")
+        
         response_text = response.text.strip()
         
         # Clean up response - remove markdown code blocks if present
@@ -415,12 +434,26 @@ if __name__ == "__main__":
     duration_formatted = str(timedelta(seconds=int(total_duration)))
     
     # Beautiful footer with execution time
-    log_section_header("EXECUTION COMPLETE")
+    log_section_header("GENERATION SUMMARY")
     
-    log_item("🕐", "End Time", time.strftime("%Y-%m-%d %H:%M:%S"))
-    log_item("⏱️", "Total Duration", duration_formatted)
-    log_item("⚡", "Performance", f"{total_duration:.2f} seconds")
+    project_name = os.path.basename(PROJECT_THEME_PATH)
     
+    # Count processed files
+    total_files = 0
+    if os.path.exists(OUTPUT_FILE):
+        total_files = 1
+    
+    logging.info("")
+    log_item("✅", "Project", project_name)
+    log_item("📄", "Total Files Processed", total_files)
+    log_item("🤖", "Gemini API Token Usage", "")
+    log_item("  ", "  • Prompt Tokens", total_prompt_tokens)
+    log_item("  ", "  • Completion Tokens", total_completion_tokens)
+    log_item("  ", "  • Total Tokens", total_tokens)
+    log_item("🏁", "Total Execution Time", f"{total_duration:.2f} seconds")
+    logging.info("")
+    
+    # Performance indicator
     if total_duration < 60:
         log_item("🚀", "Speed", "Lightning Fast! ⚡")
     elif total_duration < 180:

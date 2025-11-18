@@ -6,11 +6,27 @@ from pathlib import Path
 from dotenv import load_dotenv
 from threading import Thread, Lock
 from queue import Queue
+from pymongo import MongoClient
+from urllib.parse import urlparse
 
 # Global variables
 log_file_path = None
 log_lock = Lock()
 start_time = None
+
+# ============================================================================
+# EXCLUSION CONFIGURATION
+# ============================================================================
+# Add keywords here to exclude sections containing these terms (case-insensitive)
+# Example: 'blog' will exclude: blog, blogs, Blog Section, blog-container, etc.
+EXCLUDE_KEYWORDS = [
+    'blog',      # Excludes all blog-related sections
+    # Add more keywords below as needed:
+    # 'test',
+    # 'demo',
+    # 'sample',
+]
+# ============================================================================
 
 def log_message(message, icon="ℹ️", level="INFO"):
     """Write formatted log messages with icons and timestamps"""
@@ -46,87 +62,240 @@ def load_environment_variables():
     try:
         load_dotenv()
         project_path = os.getenv("PROJECT_PATH_FOR_CPT_GENERATION")
+        mongo_uri = os.getenv("MONGO_URI")
         
         if not project_path:
             log_message("PROJECT_PATH_FOR_CPT_GENERATION not found in .env file", "❌", "ERROR")
-            return None
+            return None, None
+        
+        if not mongo_uri:
+            log_message("MONGO_URI not found in .env file", "❌", "ERROR")
+            return None, None
         
         if not os.path.exists(project_path):
             log_message(f"Project path does not exist: {project_path}", "❌", "ERROR")
-            return None
+            return None, None
         
         log_message(f"Project path loaded: {project_path}", "✅", "SUCCESS")
-        return project_path
+        log_message(f"MongoDB URI loaded: {mongo_uri}", "✅", "SUCCESS")
+        return project_path, mongo_uri
     
     except Exception as e:
         log_message(f"Error loading environment variables: {str(e)}", "❌", "ERROR")
-        return None
+        return None, None
 
-def read_cpt_sections_data(project_path):
-    """Read and parse CPT sections data from file"""
-    log_message("Reading CPT sections data file", "📖", "INFO")
-    
-    cpt_file_path = os.path.join(project_path, "Figma-analysis-data", "CPT-Sections-Data.txt")
-    
-    if not os.path.exists(cpt_file_path):
-        log_message(f"CPT sections data file not found: {cpt_file_path}", "❌", "ERROR")
-        return []
+def connect_to_mongodb(mongo_uri):
+    """Connect to MongoDB and return database instance"""
+    log_message("Connecting to MongoDB", "🔌", "INFO")
     
     try:
-        with open(cpt_file_path, 'r', encoding='utf-8') as file:
-            content = file.read()
+        # Parse the MongoDB URI to extract database name
+        parsed_uri = urlparse(mongo_uri)
+        db_name = parsed_uri.path.lstrip('/')
         
-        log_message("CPT sections data file read successfully", "✅", "SUCCESS")
-        return content
+        if not db_name:
+            log_message("Database name not found in MONGO_URI", "❌", "ERROR")
+            return None, None
+        
+        # Connect to MongoDB
+        client = MongoClient(mongo_uri)
+        
+        # Test connection
+        client.admin.command('ping')
+        
+        db = client[db_name]
+        log_message(f"Successfully connected to MongoDB database: {db_name}", "✅", "SUCCESS")
+        
+        return client, db
     
     except Exception as e:
-        log_message(f"Error reading CPT sections data: {str(e)}", "❌", "ERROR")
-        return ""
+        log_message(f"Error connecting to MongoDB: {str(e)}", "❌", "ERROR")
+        return None, None
 
-def parse_cpt_sections(content):
-    """Parse CPT sections from content and extract section names with page names"""
-    log_message("Parsing CPT sections from data", "🔍", "INFO")
+def should_exclude_section(section_name):
+    """
+    Check if section should be excluded based on keyword matching.
+    Uses the EXCLUDE_KEYWORDS list defined at the top of the file.
     
-    cpt_sections = []
+    Matching is case-insensitive and checks if keyword appears anywhere in section name.
     
-    # Remove icons and clean the content
-    lines = content.split('\n')
-    current_page = None
+    Examples with 'blog' keyword:
+    - blog, Blog, BLOG ✓ excluded
+    - blogs, Blogs, BLOGS ✓ excluded
+    - blog-section, Blog Section, BlogSection ✓ excluded
+    - blog-container, Blog Container ✓ excluded
+    - my-blog, new-blogs, blogpost ✓ excluded
+    """
+    # Convert to lowercase for case-insensitive matching
+    section_lower = section_name.lower()
     
-    for line in lines:
-        line = line.strip()
+    # Check if any exclude keyword is present in the section name
+    for keyword in EXCLUDE_KEYWORDS:
+        if keyword.lower() in section_lower:
+            log_message(f"Excluding section '{section_name}' (contains keyword: '{keyword}')", "🚫", "INFO")
+            return True
+    
+    return False
+
+def clean_section_name(section_name):
+    """Clean section name by removing emojis and special characters"""
+    # Remove emojis and special characters, keep only alphanumeric, spaces, and hyphens
+    cleaned = re.sub(r'[^\w\s-]', '', section_name, flags=re.UNICODE)
+    # Replace multiple spaces with single space
+    cleaned = re.sub(r'\s+', ' ', cleaned)
+    # Trim whitespace
+    cleaned = cleaned.strip()
+    return cleaned
+
+def get_latest_document_from_collection(collection):
+    """Get the latest document from collection based on _id (ObjectId timestamp)"""
+    try:
+        # Find the latest document by sorting _id in descending order
+        latest_doc = collection.find_one(sort=[("_id", -1)])
         
-        # Skip empty lines and separator lines
-        if not line or line == '---':
-            continue
-        
-        # Check if it's a page header (contains 🗂️ and doesn't have ":-")
-        if '🗂️' in line and ':-' not in line:
-            # Extract page name
-            page_match = re.search(r'🗂️\s*(.+?)(?:\s*$)', line)
-            if page_match:
-                current_page = page_match.group(1).strip()
-                log_message(f"Found page: {current_page}", "📄", "INFO")
-        
-        # Check if it's a CPT section (contains ":- CPT")
-        elif 'CPT' in line and ':-' in line:
-            # Extract section name
-            section_match = re.search(r'[>#]\s*(.+?)\s*:-\s*CPT', line)
-            if section_match and current_page:
-                section_name = section_match.group(1).strip()
-                # Remove "Section" word if present
-                section_name = re.sub(r'\s+Section\s*$', '', section_name, flags=re.IGNORECASE)
-                # Remove any non-alphanumeric characters, spaces, or hyphens
-                section_name = re.sub(r'[^a-zA-Z0-9\s-]', '', section_name).strip()
-                
-                cpt_sections.append({
-                    'page': current_page,
-                    'section': section_name
-                })
-                log_message(f"Found CPT section: '{section_name}' on page '{current_page}'", "🎯", "INFO")
+        if latest_doc:
+            doc_id = latest_doc.get('_id')
+            log_message(f"Found latest document with _id: {doc_id}", "📄", "INFO")
+            return latest_doc
+        else:
+            log_message("No documents found in collection", "⚠️", "WARNING")
+            return None
     
-    log_message(f"Total CPT sections found: {len(cpt_sections)}", "📊", "INFO")
-    return cpt_sections
+    except Exception as e:
+        log_message(f"Error fetching latest document: {str(e)}", "❌", "ERROR")
+        return None
+
+def fetch_cpt_sections_from_mongodb(db):
+    """Fetch CPT sections data from MongoDB using aggregation query"""
+    log_message("Fetching CPT sections from MongoDB", "📊", "INFO")
+    
+    try:
+        # Get all collections in the database
+        collection_names = db.list_collection_names()
+        
+        if not collection_names:
+            log_message("No collections found in database", "❌", "ERROR")
+            return None
+        
+        log_message(f"Found {len(collection_names)} collection(s): {', '.join(collection_names)}", "📁", "INFO")
+        
+        # Use the first collection (or you can add logic to select specific one)
+        collection_name = collection_names[0]
+        collection = db[collection_name]
+        log_message(f"Using collection: {collection_name}", "📁", "INFO")
+        
+        # Get the latest document from the collection
+        latest_document = get_latest_document_from_collection(collection)
+        
+        if not latest_document:
+            log_message("No document found in collection", "❌", "ERROR")
+            return None
+        
+        # Get document identifier for logging
+        doc_identifier = latest_document.get('_id', 'Unknown')
+        log_message(f"Processing latest document: {doc_identifier}", "📋", "INFO")
+        
+        # MongoDB Aggregation Pipeline - process only the latest document
+        # Note: Using simplified pipeline for compatibility with older MongoDB versions
+        pipeline = [
+            # Match only the latest document by _id
+            {"$match": {"_id": latest_document['_id']}},
+            {"$unwind": "$pages"},
+            {"$unwind": "$pages.sections"},
+            # Only CPT type sections
+            {"$match": {"pages.sections.type": "CPT (Custom post type)"}},
+            # Use section name directly (we'll clean it in Python)
+            {
+                "$addFields": {
+                    "cleanSectionName": "$pages.sections.name"
+                }
+            },
+            # Group by section name -> find which pages it appears in
+            {
+                "$group": {
+                    "_id": "$cleanSectionName",
+                    "pages": {"$addToSet": "$pages.page"}
+                }
+            },
+            # Split into similar and unique sections
+            {
+                "$facet": {
+                    "similarSections": [
+                        {"$match": {"$expr": {"$gt": [{"$size": "$pages"}, 1]}}},
+                        {"$project": {"_id": 0, "sectionName": "$_id", "pages": 1}}
+                    ],
+                    "uniqueSections": [
+                        {"$match": {"$expr": {"$eq": [{"$size": "$pages"}, 1]}}},
+                        {"$unwind": "$pages"},
+                        {
+                            "$group": {
+                                "_id": "$pages",
+                                "sectionNames": {"$addToSet": "$_id"}
+                            }
+                        },
+                        {"$project": {"_id": 0, "page": "$_id", "sectionNames": 1}},
+                        {"$sort": {"page": 1}}
+                    ]
+                }
+            }
+        ]
+        
+        # Execute aggregation
+        result = list(collection.aggregate(pipeline))
+        
+        if not result:
+            log_message("No CPT sections found in MongoDB", "⚠️", "WARNING")
+            return None
+        
+        cpt_data = result[0]
+        
+        # Clean section names and filter out excluded sections
+        log_message("Cleaning section names and applying exclusion filters", "🔍", "INFO")
+        
+        # Filter similar sections
+        filtered_similar = []
+        for section in cpt_data.get('similarSections', []):
+            cleaned_name = clean_section_name(section['sectionName'])
+            if not should_exclude_section(cleaned_name):
+                section['sectionName'] = cleaned_name
+                filtered_similar.append(section)
+        
+        cpt_data['similarSections'] = filtered_similar
+        
+        # Filter unique sections
+        filtered_unique = []
+        for page_data in cpt_data.get('uniqueSections', []):
+            cleaned_names = []
+            for name in page_data['sectionNames']:
+                cleaned_name = clean_section_name(name)
+                if not should_exclude_section(cleaned_name):
+                    cleaned_names.append(cleaned_name)
+            
+            # Only include page if it has at least one non-excluded section
+            if cleaned_names:
+                page_data['sectionNames'] = cleaned_names
+                filtered_unique.append(page_data)
+        
+        cpt_data['uniqueSections'] = filtered_unique
+        
+        similar_count = len(cpt_data.get('similarSections', []))
+        unique_count = len(cpt_data.get('uniqueSections', []))
+        
+        log_message(f"After filtering: {similar_count} similar sections (appearing on multiple pages)", "📊", "INFO")
+        log_message(f"After filtering: {unique_count} pages with unique sections", "📊", "INFO")
+        
+        # Log details
+        for section in cpt_data.get('similarSections', []):
+            log_message(f"Similar Section: '{section['sectionName']}' appears on pages: {', '.join(section['pages'])}", "🔄", "INFO")
+        
+        for page_data in cpt_data.get('uniqueSections', []):
+            log_message(f"Unique Sections on '{page_data['page']}': {', '.join(page_data['sectionNames'])}", "📄", "INFO")
+        
+        return cpt_data
+    
+    except Exception as e:
+        log_message(f"Error fetching CPT sections from MongoDB: {str(e)}", "❌", "ERROR")
+        return None
 
 def generate_cpt_code(section_name, page_name, project_folder_name):
     """Generate CPT registration code for a section"""
@@ -205,8 +374,9 @@ def register_cpt_worker(cpt_queue, project_path, project_folder_name, results_qu
             
             section_name = cpt_data['section']
             page_name = cpt_data['page']
+            cpt_type = cpt_data.get('type', 'unique')  # 'similar' or 'unique'
             
-            log_message(f"Registering CPT for section: '{section_name}' on page '{page_name}'", "⚙️", "PROCESSING")
+            log_message(f"Registering {cpt_type} CPT for section: '{section_name}' on page '{page_name}'", "⚙️", "PROCESSING")
             
             # Generate CPT code
             cpt_code = generate_cpt_code(section_name, page_name, project_folder_name)
@@ -218,8 +388,8 @@ def register_cpt_worker(cpt_queue, project_path, project_folder_name, results_qu
                 with open(functions_path, 'a', encoding='utf-8') as functions_file:
                     functions_file.write(cpt_code)
             
-            log_message(f"CPT registered successfully: '{section_name}'", "✅", "SUCCESS")
-            results_queue.put({'status': 'success', 'section': section_name, 'page': page_name})
+            log_message(f"CPT registered successfully: '{section_name}' ({cpt_type})", "✅", "SUCCESS")
+            results_queue.put({'status': 'success', 'section': section_name, 'page': page_name, 'type': cpt_type})
             
         except Exception as e:
             log_message(f"Error registering CPT: {str(e)}", "❌", "ERROR")
@@ -228,7 +398,46 @@ def register_cpt_worker(cpt_queue, project_path, project_folder_name, results_qu
         finally:
             cpt_queue.task_done()
 
-def register_all_cpts(cpt_sections, project_path, num_threads=4):
+def prepare_cpt_registration_queue(cpt_data):
+    """Prepare CPT registration queue from MongoDB data"""
+    log_message("Preparing CPT registration queue", "📋", "INFO")
+    
+    cpt_queue_data = []
+    
+    # Process similar sections (only register once per section)
+    similar_sections = cpt_data.get('similarSections', [])
+    for section in similar_sections:
+        section_name = section['sectionName']
+        pages = section['pages']
+        
+        # Register only once with all pages listed
+        cpt_queue_data.append({
+            'section': section_name,
+            'page': ', '.join(pages),  # Combine all pages
+            'type': 'similar'
+        })
+        log_message(f"Queued similar section: '{section_name}' (appears on: {', '.join(pages)})", "📌", "INFO")
+    
+    # Process unique sections (register separately for each page)
+    unique_sections = cpt_data.get('uniqueSections', [])
+    for page_data in unique_sections:
+        page_name = page_data['page']
+        section_names = page_data['sectionNames']
+        
+        for section_name in section_names:
+            cpt_queue_data.append({
+                'section': section_name,
+                'page': page_name,
+                'type': 'unique'
+            })
+            log_message(f"Queued unique section: '{section_name}' on page '{page_name}'", "📌", "INFO")
+    
+    total_registrations = len(cpt_queue_data)
+    log_message(f"Total CPT registrations to process: {total_registrations}", "📊", "INFO")
+    
+    return cpt_queue_data
+
+def register_all_cpts(cpt_queue_data, project_path, num_threads=4):
     """Register all CPTs using multithreading"""
     log_message(f"Starting CPT registration with {num_threads} threads", "🚀", "INFO")
     
@@ -240,7 +449,7 @@ def register_all_cpts(cpt_sections, project_path, num_threads=4):
     results_queue = Queue()
     
     # Add all CPT sections to queue
-    for cpt_data in cpt_sections:
+    for cpt_data in cpt_queue_data:
         cpt_queue.put(cpt_data)
     
     # Create and start worker threads
@@ -263,11 +472,15 @@ def register_all_cpts(cpt_sections, project_path, num_threads=4):
         thread.join()
     
     # Collect results
-    results = {'success': [], 'error': []}
+    results = {'success': [], 'error': [], 'similar': [], 'unique': []}
     while not results_queue.empty():
         result = results_queue.get()
         if result['status'] == 'success':
             results['success'].append(result)
+            if result.get('type') == 'similar':
+                results['similar'].append(result)
+            else:
+                results['unique'].append(result)
         else:
             results['error'].append(result)
     
@@ -283,15 +496,25 @@ def generate_summary_report(results, execution_time):
     total_cpts = len(results['success']) + len(results['error'])
     success_count = len(results['success'])
     error_count = len(results['error'])
+    similar_count = len(results['similar'])
+    unique_count = len(results['unique'])
     
     log_message(f"Total CPTs Processed: {total_cpts}", "📈", "INFO")
     log_message(f"Successfully Registered: {success_count}", "✅", "SUCCESS")
+    log_message(f"  - Similar Sections (Multi-page): {similar_count}", "🔄", "INFO")
+    log_message(f"  - Unique Sections (Single-page): {unique_count}", "📄", "INFO")
     log_message(f"Failed: {error_count}", "❌", "ERROR")
     log_message("", "", "INFO")
     
-    if results['success']:
-        log_message("Successfully Registered CPTs:", "✅", "SUCCESS")
-        for result in results['success']:
+    if results['similar']:
+        log_message("Similar Sections Registered (appear on multiple pages):", "🔄", "SUCCESS")
+        for result in results['similar']:
+            log_message(f"  ✓ {result['section']} (Pages: {result['page']})", "  ", "INFO")
+    
+    if results['unique']:
+        log_message("", "", "INFO")
+        log_message("Unique Sections Registered (page-specific):", "📄", "SUCCESS")
+        for result in results['unique']:
             log_message(f"  ✓ {result['section']} (Page: {result['page']})", "  ", "INFO")
     
     if results['error']:
@@ -311,41 +534,54 @@ def main():
     global start_time
     start_time = time.time()
     
-    print("🚀 Starting WordPress CPT Registration Script...\n")
+    print("🚀 Starting WordPress CPT Registration Script (MongoDB Edition)...\n")
     
     # Load environment variables
-    project_path = load_environment_variables()
-    if not project_path:
-        print("❌ Failed to load project path. Exiting...")
+    project_path, mongo_uri = load_environment_variables()
+    if not project_path or not mongo_uri:
+        print("❌ Failed to load environment variables. Exiting...")
         return
     
     # Initialize log file
     initialize_log_file(project_path)
     
-    # Read CPT sections data
-    content = read_cpt_sections_data(project_path)
-    if not content:
-        log_message("No CPT sections data found. Exiting...", "❌", "ERROR")
+    # Connect to MongoDB
+    mongo_client, db = connect_to_mongodb(mongo_uri)
+    if db is None:
+        log_message("Failed to connect to MongoDB. Exiting...", "❌", "ERROR")
         return
     
-    # Parse CPT sections
-    cpt_sections = parse_cpt_sections(content)
-    if not cpt_sections:
-        log_message("No CPT sections found to register. Exiting...", "⚠️", "WARNING")
-        return
+    try:
+        # Fetch CPT sections data from MongoDB
+        cpt_data = fetch_cpt_sections_from_mongodb(db)
+        if not cpt_data:
+            log_message("No CPT sections data found in MongoDB. Exiting...", "❌", "ERROR")
+            return
+        
+        # Prepare CPT registration queue
+        cpt_queue_data = prepare_cpt_registration_queue(cpt_data)
+        if not cpt_queue_data:
+            log_message("No CPT sections to register. Exiting...", "⚠️", "WARNING")
+            return
+        
+        # Register all CPTs with multithreading
+        results = register_all_cpts(cpt_queue_data, project_path, num_threads=4)
+        
+        # Calculate execution time
+        execution_time = time.time() - start_time
+        
+        # Generate summary report
+        generate_summary_report(results, execution_time)
+        
+        print(f"\n✅ Script completed successfully!")
+        print(f"⏱️  Total execution time: {execution_time:.2f} seconds")
+        print(f"📄 Check the log file for details: {log_file_path}")
     
-    # Register all CPTs with multithreading
-    results = register_all_cpts(cpt_sections, project_path, num_threads=4)
-    
-    # Calculate execution time
-    execution_time = time.time() - start_time
-    
-    # Generate summary report
-    generate_summary_report(results, execution_time)
-    
-    print(f"\n✅ Script completed successfully!")
-    print(f"⏱️  Total execution time: {execution_time:.2f} seconds")
-    print(f"📄 Check the log file for details: {log_file_path}")
+    finally:
+        # Close MongoDB connection
+        if mongo_client:
+            mongo_client.close()
+            log_message("MongoDB connection closed", "🔌", "INFO")
 
 if __name__ == "__main__":
     main()

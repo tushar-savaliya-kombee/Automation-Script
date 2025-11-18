@@ -23,6 +23,10 @@ load_dotenv()
 log_lock = Lock()
 log_file = None # Will be set dynamically in initialize_log
 start_time = time.time()
+total_prompt_tokens = 0
+total_completion_tokens = 0
+total_tokens = 0
+token_lock = Lock()
 
 # Icons for beautiful logging
 ICONS = {
@@ -251,6 +255,8 @@ def download_frame_image(file_key, node_id, api_token, output_path, frame_type):
 
 def generate_markdown_from_image(image_path, frame_type, gemini_api_key, gemini_model):
     """Use Gemini AI to generate markdown from image"""
+    global total_prompt_tokens, total_completion_tokens, total_tokens
+    
     log_message(f"Analyzing {frame_type} image with Gemini AI ({gemini_model})...", 'ai')
     
     try:
@@ -320,6 +326,16 @@ REMEMBER: Do NOT include social media sections or icons. Only navigation text li
 """
         
         response = model.generate_content([prompt, {'mime_type': 'image/png', 'data': image_data}])
+        
+        # Track token usage
+        if hasattr(response, 'usage_metadata'):
+            with token_lock:
+                prompt_tokens = getattr(response.usage_metadata, 'prompt_token_count', 0)
+                completion_tokens = getattr(response.usage_metadata, 'candidates_token_count', 0)
+                total_prompt_tokens += prompt_tokens
+                total_completion_tokens += completion_tokens
+                total_tokens += (prompt_tokens + completion_tokens)
+                log_message(f"Tokens used - Prompt: {prompt_tokens}, Completion: {completion_tokens}", 'info')
         
         log_message(f"Gemini AI analysis completed for {frame_type}", 'success')
         return response.text
@@ -397,6 +413,8 @@ def create_header_footer_content(PROJECT_THEME_PATH):
 
 def generate_menu_registration_code(markdown_content, gemini_api_key, gemini_model):
     """Generate WordPress menu registration code using Gemini AI"""
+    global total_prompt_tokens, total_completion_tokens, total_tokens
+    
     log_section("Generating Menu Registration Code")
     
     try:
@@ -435,6 +453,17 @@ Output ONLY the PHP code, nothing else.
 """
         
         response = model.generate_content(prompt)
+        
+        # Track token usage
+        if hasattr(response, 'usage_metadata'):
+            with token_lock:
+                prompt_tokens = getattr(response.usage_metadata, 'prompt_token_count', 0)
+                completion_tokens = getattr(response.usage_metadata, 'candidates_token_count', 0)
+                total_prompt_tokens += prompt_tokens
+                total_completion_tokens += completion_tokens
+                total_tokens += (prompt_tokens + completion_tokens)
+                log_message(f"Tokens used - Prompt: {prompt_tokens}, Completion: {completion_tokens}", 'info')
+        
         code = response.text.strip()
         
         # Clean up code blocks if present
@@ -494,6 +523,8 @@ def extract_menu_field_names(PROJECT_THEME_PATH):
 
 def generate_acf_filter_code(field_names, gemini_api_key, gemini_model):
     """Generate ACF filter code for menu dropdowns"""
+    global total_prompt_tokens, total_completion_tokens, total_tokens
+    
     log_section("Generating ACF Filter Code")
     
     if not field_names:
@@ -530,6 +561,17 @@ Output ONLY the PHP code, nothing else.
 """
         
         response = model.generate_content(prompt)
+        
+        # Track token usage
+        if hasattr(response, 'usage_metadata'):
+            with token_lock:
+                prompt_tokens = getattr(response.usage_metadata, 'prompt_token_count', 0)
+                completion_tokens = getattr(response.usage_metadata, 'candidates_token_count', 0)
+                total_prompt_tokens += prompt_tokens
+                total_completion_tokens += completion_tokens
+                total_tokens += (prompt_tokens + completion_tokens)
+                log_message(f"Tokens used - Prompt: {prompt_tokens}, Completion: {completion_tokens}", 'info')
+        
         code = response.text.strip()
         
         # Clean up code blocks
@@ -647,16 +689,34 @@ def main():
         append_to_functions_php(PROJECT_THEME_PATH, menu_code, filter_code)
     
     # Final summary
-    log_section("Execution Summary")
+    log_section("Generation Summary")
     elapsed_time = time.time() - start_time
     
-    log_message(f"Total Execution Time: {elapsed_time:.2f} seconds", 'time')
-    log_message("WordPress Menu Generator Completed Successfully", 'success', 'SUCCESS')
+    # Create summary
+    summary = f"""
+{'=' * 80}
+GENERATION SUMMARY
+{'=' * 80}
+✅ Project: {os.path.basename(PROJECT_THEME_PATH)}
+🤖 Gemini API Token Usage:
+   • Prompt Tokens: {total_prompt_tokens}
+   • Completion Tokens: {total_completion_tokens}
+   • Total Tokens: {total_tokens}
+🏁 Total Execution Time: {elapsed_time:.2f} seconds
+{'=' * 80}
+"""
     
-    print(f"\n{'=' * 80}")
-    print(f"🎉 Process completed in {elapsed_time:.2f} seconds")
-    print(f"📋 Log file: {log_file}")
-    print(f"{'=' * 80}\n")
+    # Log summary
+    print(summary)
+    sys.stdout.flush()
+    
+    try:
+        with open(log_file, 'a', encoding='utf-8') as f:
+            f.write(summary)
+    except:
+        pass
+    
+    log_message("WordPress Menu Generator Completed Successfully", 'success', 'SUCCESS')
 
 if __name__ == "__main__":
     main()
