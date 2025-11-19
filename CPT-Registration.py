@@ -61,11 +61,11 @@ def load_environment_variables():
     
     try:
         load_dotenv()
-        project_path = os.getenv("PROJECT_PATH_FOR_CPT_GENERATION")
+        project_path = os.getenv("PROJECT_THEME_PATH")
         mongo_uri = os.getenv("MONGO_URI")
         
         if not project_path:
-            log_message("PROJECT_PATH_FOR_CPT_GENERATION not found in .env file", "❌", "ERROR")
+            log_message("PROJECT_THEME_PATH not found in .env file", "❌", "ERROR")
             return None, None
         
         if not mongo_uri:
