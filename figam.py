@@ -22,14 +22,16 @@ load_dotenv()
 # Get configuration from environment
 FIGMA_ACCESS_TOKEN = os.getenv("FIGMA_ACCESS_TOKEN")
 FIGMA_FILE_URL = os.getenv("FIGMA_FILE_URL")
+# print(f" - FIGMA_FILE_URL: {FIGMA_FILE_URL}") # Commented out for cleaner test output
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
 MULTI_PAGE_MODE = os.getenv("MULTI_PAGE_MODE", "true").lower() == "true"
 PAGE_PROCESSING_DELAY = int(os.getenv("PAGE_PROCESSING_DELAY", 3))
 USE_FIGMA_PAGE_NAMES = os.getenv("USE_FIGMA_PAGE_NAMES", "true").lower() == "true"
 IS_COMMAN_HEADER_FOOTER = os.getenv("IS_COMMAN_HEADER_FOOTER", "false").lower() == "true"
-MAX_WORKERS = int(os.getenv("MAX_WORKERS", 3))
-PROCESSING_DELAY = 3
+MAX_WORKERS = int(os.getenv("MAX_WORKERS", 3))  # Maximum number of concurrent threads
+PROCESSING_DELAY = 3  # Fixed delay as requested
+
 
 # Configure Google Gemini AI
 genai.configure(api_key=GEMINI_API_KEY)
@@ -66,11 +68,67 @@ log_lock = threading.Lock()
 components_lock = threading.Lock()
 file_write_lock = threading.Lock()
 
+# --- Token Usage Tracking ---
+class TokenUsageTracker:
+    """Thread-safe tracker for Gemini API token usage."""
+    
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.total_prompt_tokens = 0
+        self.total_completion_tokens = 0
+        self.total_tokens = 0
+        self.api_calls = 0
+        self.files_generated = 0
+    
+    def add_usage(self, prompt_tokens=0, completion_tokens=0, total_tokens=0):
+        """Add token usage from an API call."""
+        with self.lock:
+            self.total_prompt_tokens += prompt_tokens
+            self.total_completion_tokens += completion_tokens
+            self.total_tokens += total_tokens
+            self.api_calls += 1
+    
+    def increment_files(self, count=1):
+        """Increment the count of generated files."""
+        with self.lock:
+            self.files_generated += count
+    
+    def get_summary(self):
+        """Get a summary of token usage."""
+        with self.lock:
+            return {
+                'prompt_tokens': self.total_prompt_tokens,
+                'completion_tokens': self.total_completion_tokens,
+                'total_tokens': self.total_tokens,
+                'api_calls': self.api_calls,
+                'files_generated': self.files_generated
+            }
+
+# Global token tracker
+token_tracker = TokenUsageTracker()
+
+class SafeConsoleFormatter(logging.Formatter):
+    """Custom formatter that removes emojis for Windows console compatibility."""
+    
+    def format(self, record):
+        # Format the message normally
+        formatted = super().format(record)
+        # Remove emojis and other non-ASCII characters for console
+        try:
+            # Try to encode as ASCII, if it fails, strip non-ASCII
+            formatted.encode('cp1252')
+            return formatted
+        except UnicodeEncodeError:
+            # Remove characters that can't be encoded in cp1252
+            return formatted.encode('cp1252', errors='ignore').decode('cp1252')
+
 def setup_logging(project_dir, project_name):
     """Initialize logging to file and console inside the project directory."""
     global logger
     
     log_formatter = logging.Formatter('%(asctime)s [%(threadName)s] %(message)s')
+    console_formatter = SafeConsoleFormatter('%(asctime)s [%(threadName)s] %(message)s')
+    
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
     
@@ -91,14 +149,14 @@ def setup_logging(project_dir, project_name):
                 break
             i += 1
     
-    # Thread-safe file handler
-    file_handler = logging.FileHandler(log_file_path, mode='w')
+    # Thread-safe file handler with UTF-8 encoding for emojis
+    file_handler = logging.FileHandler(log_file_path, mode='w', encoding='utf-8')
     file_handler.setFormatter(log_formatter)
     logger.addHandler(file_handler)
     
-    # Thread-safe console handler
+    # Thread-safe console handler with safe formatter
     console_handler = logging.StreamHandler()
-    console_handler.setFormatter(log_formatter)
+    console_handler.setFormatter(console_formatter)
     logger.addHandler(console_handler)
     
     return log_file_path
@@ -108,7 +166,12 @@ def thread_safe_log(level, message):
     """Thread-safe logging function."""
     if logger is None:
         # Fallback to print if logger not initialized yet
-        print(f"[{level.upper()}] {message}")
+        try:
+            print(f"[{level.upper()}] {message}")
+        except UnicodeEncodeError:
+            # Remove emojis if console can't handle them
+            clean_message = message.encode('cp1252', errors='ignore').decode('cp1252')
+            print(f"[{level.upper()}] {clean_message}")
         return
         
     with log_lock:
@@ -188,7 +251,7 @@ def figma_api_get(endpoint):
         except requests.exceptions.RequestException as e:
             thread_safe_log('warning', f"Figma API request failed (attempt {attempt + 1}/{max_retries}): {e}")
             if attempt < max_retries - 1:
-                time.sleep(2 ** attempt)
+                time.sleep(2 ** attempt)  # Exponential backoff
             else:
                 raise
 
@@ -224,7 +287,9 @@ def find_asset_nodes(node, image_nodes, icon_nodes):
                 'width': round(width),
                 'height': round(height)
             }
+        # Do not return; a logo component might have other assets inside.
 
+    # Heuristic to identify images: a node that has an image fill.
     has_image_fill = False
     if 'fills' in node and isinstance(node['fills'], list):
         for fill in node['fills']:
@@ -232,6 +297,7 @@ def find_asset_nodes(node, image_nodes, icon_nodes):
                 has_image_fill = True
                 break
 
+    # If it has an image fill, treat it as a distinct image asset.
     if has_image_fill:
         node_name = node.get('name', '')
         clean_name = sanitize_filename(node_name)
@@ -249,6 +315,7 @@ def find_asset_nodes(node, image_nodes, icon_nodes):
                 'height': round(height)
             }
 
+    # Heuristic to identify icons: node is a vector, or its name suggests it's an icon.
     node_name = node.get('name', '').lower()
     is_vector = node.get('type') == 'VECTOR'
     is_boolean_op = node.get('type') == 'BOOLEAN_OPERATION'
@@ -257,9 +324,10 @@ def find_asset_nodes(node, image_nodes, icon_nodes):
     if is_vector or is_boolean_op or is_icon_by_name:
         icon_name = node.get('name', '').strip()
         if icon_name:
-            icon_nodes.add(icon_name)
+            icon_nodes.add(icon_name)  # Use a set to avoid duplicates
         return
 
+    # Recurse through children if they exist.
     if 'children' in node and isinstance(node['children'], list):
         for child in node['children']:
             if isinstance(child, dict):
@@ -269,6 +337,7 @@ def download_node_image(file_key, node_id, output_path):
     """Requests an image export from Figma and downloads it with thread-safe rate limiting."""
     thread_safe_log('info', f"   -> Requesting image export for node '{node_id}'...")
     
+    # Apply rate limiting for Figma API calls
     figma_rate_limiter.wait_if_needed()
     
     img_endpoint = f"images/{file_key}?ids={node_id}&format=png&scale=2"
@@ -292,6 +361,7 @@ def download_node_image(file_key, node_id, output_path):
             response = requests.get(img_url, stream=True, timeout=30)
             response.raise_for_status()
             
+            # Thread-safe directory creation
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
             
             image = Image.open(BytesIO(response.content))
@@ -306,10 +376,11 @@ def download_node_image(file_key, node_id, output_path):
         except Exception as e:
             thread_safe_log('warning', f"Download attempt {attempt + 1}/{max_retries} failed for node '{node_id}': {e}")
             if attempt < max_retries - 1:
-                time.sleep(2 ** attempt)
+                time.sleep(2 ** attempt)  # Exponential backoff
             else:
                 thread_safe_log('error', f"Failed to download image for node '{node_id}' after {max_retries} attempts")
                 return None, None
+
 
 def download_single_image(node_id, image_url, node_details, assets_dir):
     """Downloads a single image in a thread-safe manner."""
@@ -325,6 +396,7 @@ def download_single_image(node_id, image_url, node_details, assets_dir):
         image_response = requests.get(image_url, timeout=30)
         image_response.raise_for_status()
 
+        # Thread-safe file writing
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
         with open(filepath, "wb") as f:
             f.write(image_response.content)
@@ -351,6 +423,7 @@ def download_figma_images(file_key, image_nodes, token, project_dir):
     assets_dir = os.path.join(project_dir, "src", "public", "img")
     os.makedirs(assets_dir, exist_ok=True)
 
+    # Get image URLs from Figma API with rate limiting
     figma_rate_limiter.wait_if_needed()
     headers = {"X-Figma-Token": token}
     ids_param = ",".join(image_nodes.keys())
@@ -371,6 +444,7 @@ def download_figma_images(file_key, image_nodes, token, project_dir):
     image_urls = image_data.get('images', {})
     downloaded_files = {}
 
+    # Download images concurrently
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         future_to_node = {
             executor.submit(download_single_image, node_id, image_url, image_nodes.get(node_id), assets_dir): node_id
@@ -389,12 +463,14 @@ def download_figma_images(file_key, image_nodes, token, project_dir):
 
 def extract_design_properties(node, properties):
     """Recursively traverses the node tree to extract design properties like colors, fonts, and button styles."""
+    # Extract colors from fills and strokes
     for prop in ['fills', 'strokes']:
         if prop in node and isinstance(node[prop], list):
             for paint in node[prop]:
                 if paint.get('type') == 'SOLID' and paint.get('visible', True):
                     color_data = paint.get('color')
                     if color_data:
+                        # Convert RGBA (0-1 floats) to a CSS hex string
                         r = int(color_data['r'] * 255)
                         g = int(color_data['g'] * 255)
                         b = int(color_data['b'] * 255)
@@ -414,15 +490,18 @@ def extract_design_properties(node, properties):
                                 r = int(color_data['r'] * 255)
                                 g = int(color_data['g'] * 255)
                                 b = int(color_data['b'] * 255)
-                                a = round(color_data.get('a', 1) * 100)
+                                a = round(color_data.get('a', 1) * 100) # Alpha as percentage
+                                # Format as rgba(r, g, b, a%) or rgb(r, g, b) if alpha is 100%
                                 color_str = f"rgba({r}, {g}, {b}, {a}%)" if a < 100 else f"rgb({r}, {g}, {b})"
                                 gradient_info['stops'].append({
                                     'color': color_str,
-                                    'position': round(position * 100)
+                                    'position': round(position * 100) # Position as percentage
                                 })
                         if gradient_info['stops']:
+                            # Convert to a hashable tuple of tuples for the set
                             properties['gradients'].add(tuple(sorted(tuple(s.items()) for s in gradient_info['stops'])))
 
+    # Extract font styles from text nodes
     if node.get('type') == 'TEXT':
         style = node.get('style', {})
         font_info = {
@@ -431,6 +510,7 @@ def extract_design_properties(node, properties):
             'Weight': style.get('fontWeight'),
             'Line-Height': f"{style.get('lineHeightPx')}px"
         }
+        # Get text color from its fills
         if 'fills' in node and isinstance(node['fills'], list):
             for paint in node.get('fills', []):
                 if paint.get('type') == 'SOLID':
@@ -439,8 +519,10 @@ def extract_design_properties(node, properties):
                         r, g, b = int(color_data['r'] * 255), int(color_data['g'] * 255), int(color_data['b'] * 255)
                         font_info['Color'] = f"#{r:02x}{g:02x}{b:02x}"
                         break
+        # Use a tuple of items to make it hashable for the set
         properties['fonts'].add(tuple(sorted(font_info.items())))
 
+    # Heuristic for buttons: A frame with a corner radius, a background color, and a text child.
     is_frame_or_component = node.get('type') in ['FRAME', 'COMPONENT', 'COMPONENT_SET']
     has_children = 'children' in node and isinstance(node['children'], list)
 
@@ -452,15 +534,18 @@ def extract_design_properties(node, properties):
 
         if has_text_child and has_bg_color and node.get('name', '').lower() not in ['icon', 'logo']:
             button_style = {}
+            # Background color
             for fill in node.get('fills', []):
                 if fill.get('type') == 'SOLID':
                     color_data = fill.get('color')
                     r, g, b = int(color_data['r'] * 255), int(color_data['g'] * 255), int(color_data['b'] * 255)
                     button_style['background-color'] = f"#{r:02x}{g:02x}{b:02x}"
                     break
+            # Corner radius
             if 'cornerRadius' in node and node['cornerRadius'] > 0:
                 button_style['border-radius'] = f"{node['cornerRadius']}px"
             
+            # Padding (approximated from child positions)
             if len(node['children']) > 0:
                 child_box = node['children'][0].get('absoluteBoundingBox', {})
                 node_box = node.get('absoluteBoundingBox', {})
@@ -469,8 +554,10 @@ def extract_design_properties(node, properties):
                     if padding_y > 2:
                          button_style['padding-vertical'] = f"{round(padding_y)}px"
 
+            # Use tuple of items to make it hashable for the set
             properties['buttons'].add(tuple(sorted(button_style.items())))
 
+    # Recurse through children
     if has_children:
         for child in node['children']:
             if isinstance(child, dict):
@@ -591,11 +678,13 @@ def create_master_prompt(project_name, page_name, image_path, image_details, gen
     """Creates the master prompt for a full page, aware of existing components and assets."""
     image_list = f"- `{image_path}` (Size: {image_details['width']}x{image_details['height']}px)"
 
+    # Initialize dynamic instruction sections
     component_injection_instructions = ""
     image_prompt_section = ""
     design_summary_section = ""
     section_marker_instructions = ""
 
+    # --- Component Injection Instructions ---
     if is_header_footer_common and is_first_page:
         component_injection_instructions = """
 **AI Task Refinement (CRITICAL for Common Components - First Page):**
@@ -654,6 +743,7 @@ def create_master_prompt(project_name, page_name, image_path, image_details, gen
     *   For the Footer: `<footer id="footer-placeholder"></footer>`
 """
     else:
+        # Original logic if not using common header/footer
         if generated_components:
             placeholders = []
             for component, path in generated_components.items():
@@ -674,6 +764,7 @@ def create_master_prompt(project_name, page_name, image_path, image_details, gen
     *   **STRICTLY ENFORCED:** Do NOT include any conversational text, explanations, or remarks outside of the code block. ONLY the `FILEPATH:` and code block are allowed.
 """
 
+    # --- Image Assets Section ---
     if downloaded_assets:
         asset_list = "\n".join(
             [f"- `{path}` (Size: {details['width']}x{details['height']}px)"
@@ -688,6 +779,7 @@ def create_master_prompt(project_name, page_name, image_path, image_details, gen
 {asset_list}
 """
 
+    # --- Design System Summary Section ---
     if design_summary:
         colors_str = ", ".join(sorted(design_summary.get('colors', [])))
         
@@ -725,6 +817,7 @@ You MUST use these values when deciding on your Tailwind CSS classes.
 {gradients_str or "No linear gradients found."}
 """
 
+    # --- Section Markers Instructions ---
     if page_sections:
         section_list_formatted = "\n".join([f"        *   `{section_name}`" for section_name in page_sections])
         section_marker_instructions = f"""
@@ -834,20 +927,31 @@ def generate_code_with_gemini(prompt, image_path):
     
     for attempt in range(max_retries):
         try:
+            # Load image using PIL instead of uploading
             thread_safe_log('info', f"   -> Loading image file: {image_path}")
             image = Image.open(image_path)
             
+            # Generate content with the image directly
             thread_safe_log('info', "   -> Generating content with Gemini AI...")
             response = model.generate_content([prompt, image])
             thread_safe_log('info', "   -> Received response from Gemini AI.")
             thread_safe_log('debug', f"GEMINI RAW RESPONSE:\n---\n{response.text}\n---")
+            
+            # Track token usage
+            if hasattr(response, 'usage_metadata') and response.usage_metadata:
+                prompt_tokens = getattr(response.usage_metadata, 'prompt_token_count', 0)
+                completion_tokens = getattr(response.usage_metadata, 'candidates_token_count', 0)
+                total_tokens = getattr(response.usage_metadata, 'total_token_count', 0)
+                
+                token_tracker.add_usage(prompt_tokens, completion_tokens, total_tokens)
+                thread_safe_log('info', f"   -> Token usage - Prompt: {prompt_tokens}, Completion: {completion_tokens}, Total: {total_tokens}")
             
             return response.text
             
         except Exception as e:
             thread_safe_log('warning', f"Gemini API request failed (attempt {attempt + 1}/{max_retries}): {e}")
             if attempt < max_retries - 1:
-                time.sleep(2 ** attempt)
+                time.sleep(2 ** attempt)  # Exponential backoff
             else:
                 thread_safe_log('error', f"An error occurred with the Gemini API after {max_retries} attempts: {e}")
                 return None
@@ -856,20 +960,28 @@ def parse_ai_response(response_text):
     """Parses the multi-file AI response using regex."""
     files = {}
     
+    # Split the response by FILEPATH: to get individual file blocks
+    # re.split will include the delimiter, so we need to handle that
+    # Use a regex that captures the delimiter so it's included in the split list
     file_blocks = re.split(r'(FILEPATH:\s*[^\n]+)', response_text, flags=re.IGNORECASE)
 
+    # The first element will be everything before the first FILEPATH, which we ignore
+    # Then it alternates: delimiter, content, delimiter, content...
     current_filepath = None
     for i, block in enumerate(file_blocks):
         if not block.strip():
-            continue
+            continue # Skip empty blocks
 
         if block.lower().startswith('filepath:'):
+            # This is a filepath declaration
+            # Extract the actual path
             match = re.search(r'FILEPATH:\s*([^\n]+)', block, re.IGNORECASE)
             if match:
                 current_filepath = match.group(1).strip()
             else:
                 current_filepath = None
         elif current_filepath:
+            # This block is the content for the previously found filepath
             content = block.strip()
             
             content = re.sub(r'^```(?:\w+)?\s*\n?', '', content, flags=re.IGNORECASE)
@@ -893,6 +1005,7 @@ def parse_ai_response(response_text):
 
 def save_files_from_response(project_dir, files, figma_frame_name=None):
     """Thread-safe function to save parsed files to the project directory."""
+    files_saved = 0
     for file_path, content in files.items():
         if os.path.isabs(file_path):
             thread_safe_log('warning', f"File path '{file_path}' is absolute, skipping.")
@@ -911,8 +1024,13 @@ def save_files_from_response(project_dir, files, figma_frame_name=None):
                 with open(full_path, 'w', encoding='utf-8') as f:
                     f.write(content)
                 thread_safe_log('info', f"   -> Wrote file: {full_path}")
+                files_saved += 1
             except IOError as e:
                 thread_safe_log('error', f"Failed to write file {full_path}: {e}")
+    
+    # Track generated files
+    if files_saved > 0:
+        token_tracker.increment_files(files_saved)
 
 def inject_component_loader_js(project_dir, generated_components):
     """Appends JavaScript to main.js to load HTML components."""
@@ -955,6 +1073,30 @@ def sanitize_filename(name):
     """Sanitizes a string to be a valid filename."""
     return re.sub(r'[^a-zA-Z0-9_. -]', '', name).replace(' ', '_')
 
+def convert_to_filename(page_name):
+    """
+    Converts a Figma page name to a clean, URL-friendly filename.
+    Examples:
+        "Who We Are" -> "who-we-are"
+        "About Us!" -> "about-us"
+        "Contact  &  Support" -> "contact-support"
+        "Home Page 2024" -> "home-page-2024"
+    """
+    # Convert to lowercase
+    filename = page_name.lower()
+    
+    # Replace spaces and special characters with hyphens
+    filename = re.sub(r'[^a-z0-9]+', '-', filename)
+    
+    # Remove leading/trailing hyphens
+    filename = filename.strip('-')
+    
+    # If empty after cleaning, use a default
+    if not filename:
+        filename = "page"
+    
+    return filename
+
 def extract_sections_from_page_node(page_node):
     """Extracts the names of top-level frames within a page node, which are treated as sections."""
     sections = []
@@ -973,7 +1115,8 @@ def process_single_page(page_data):
         page_node, page_index, total_pages, file_key, PROJECT_NAME, generated_components, downloaded_assets, design_summary = page_data
         
         page_name_raw = page_node['name']
-        page_name = re.sub(r'[^a-zA-Z0-9]', '', page_name_raw).lower()
+        # Use the new convert_to_filename function for clean, URL-friendly names
+        page_name = convert_to_filename(page_name_raw)
         output_filename = f"{page_name}.html"
         is_first_page = (page_index == 0)
         
@@ -984,7 +1127,8 @@ def process_single_page(page_data):
             time.sleep(PROCESSING_DELAY)
         
         img_dir = os.path.join(PROJECT_NAME, "src", "public", "img")
-        img_filename = f"page_{page_name}.png"
+        # Use consistent naming for page images
+        img_filename = f"page-{page_name}.png"
         img_output_path = os.path.join(img_dir, img_filename)
         
         max_download_retries = 3
@@ -1288,9 +1432,25 @@ def main():
         thread_safe_log('critical', traceback.format_exc())
     finally:
         end_time = time.time()
-        thread_safe_log('info', "==================================================")
-        thread_safe_log('info', f"    SCRIPT FINISHED in {end_time - start_time:.2f} seconds")
-        thread_safe_log('info', "==================================================")
+        execution_time = end_time - start_time
+        
+        # Get token usage summary
+        usage_summary = token_tracker.get_summary()
+        
+        # Print generation summary
+        thread_safe_log('info', "\n")
+        thread_safe_log('info', "=" * 70)
+        thread_safe_log('info', "GENERATION SUMMARY".center(70))
+        thread_safe_log('info', "=" * 70)
+        thread_safe_log('info', f"✅ Project: {PROJECT_NAME}")
+        thread_safe_log('info', f"📄 Total Files Generated: {usage_summary['files_generated']}")
+        thread_safe_log('info', f"🤖 Gemini API Calls: {usage_summary['api_calls']}")
+        thread_safe_log('info', f"📊 Token Usage:")
+        thread_safe_log('info', f"   • Prompt Tokens: {usage_summary['prompt_tokens']:,}")
+        thread_safe_log('info', f"   • Completion Tokens: {usage_summary['completion_tokens']:,}")
+        thread_safe_log('info', f"   • Total Tokens: {usage_summary['total_tokens']:,}")
+        thread_safe_log('info', f"🏁 Total Execution Time: {execution_time:.2f} seconds")
+        thread_safe_log('info', "=" * 70)
 
 if __name__ == "__main__":     
     main()
